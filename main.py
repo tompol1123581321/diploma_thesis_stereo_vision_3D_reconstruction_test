@@ -3,48 +3,53 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2  # OpenCV library
-import open3d as o3d  # Open3D library
+import open3d as o3d
+import torch
 
-# Load calibration parameters
-focal_length = 1733.74
-baseline = 536.62
-ndisp = 170
-vmin = 55
-vmax = 142
+from model.model_training import start_training
+from model.read_pfm import readPFM 
 
-def readPFM(file):
-    with open(file, "rb") as f:
-        # Read header
-        header = f.readline().rstrip()
-        if header == b'PF':
-            color = True
-        elif header == b'Pf':
-            color = False
-        else:
-            raise Exception('Not a PFM file.')
 
-        # Read dimensions
-        dim_match = re.match(r'^(\d+)\s(\d+)\s$', f.readline().decode('latin-1'))
-        if dim_match:
-            width, height = map(int, dim_match.groups())
-        else:
-            raise Exception('Malformed PFM header.')
 
-        # Read scale
-        scale = float(f.readline().rstrip())
-        if scale < 0: # little-endian
-            endian = '<'  # little endian
-            scale = -scale
-        else:
-            endian = '>'  # big endian
+def extract_parameters(filepath):
+    params = {}
+    with open(filepath, 'r') as file:
+        for line in file:
+            if '=' in line:
+                key, value = line.strip().split('=')
+                params[key.strip()] = value.strip()
+    
+    # Extract specific parameters
+    focal_length = float(params.get('cam0').split()[0][1:])
+    baseline = float(params.get('baseline'))
+    ndisp = int(params.get('ndisp'))
+    vmin = int(params.get('vmin'))
+    vmax = int(params.get('vmax'))
 
-        # Read data
-        data = np.fromfile(f, endian + 'f')
-        shape = (height, width, 3) if color else (height, width)
-        data = np.reshape(data, shape)
-        data = np.flipud(data)  # PFM files are stored in top-to-bottom order
+    return focal_length, baseline, ndisp, vmin, vmax
 
-    return data
+focal_length, baseline, ndisp, vmin, vmax = extract_parameters("data/bandsaw1/calib.txt")
+print(focal_length, baseline, ndisp, vmin, vmax)
+
+def test_visualize_disparity_map(disparity):
+    """
+    Visualizes a disparity map using a heatmap.
+    
+    Args:
+    disparity (numpy.array or torch.Tensor): The disparity map to visualize.
+    """
+    if isinstance(disparity, torch.Tensor):
+        # Check if the tensor is on GPU, and move it to CPU
+        disparity = disparity.cpu()
+        
+        # Convert torch.Tensor to numpy array
+        disparity = disparity.numpy()
+    
+    plt.imshow(disparity, cmap='hot')
+    plt.colorbar()
+    plt.title('Disparity Map')
+    plt.show()
+
 
 
 def calculate_depth_map(disparity,focal_length,baseline):
@@ -96,10 +101,10 @@ def vizualize_3D_mesh(pcd):
     o3d.visualization.draw_geometries([pcd], point_show_normal=False)
 
 def main():
-    disparity = readPFM('data/artroom1/disp0.pfm')
+    disparity = readPFM("data/bandsaw1/disp0.pfm")
     depth = calculate_depth_map(disparity,focal_length,baseline)
     X_valid, Y_valid, Z_valid = create_point_cloud(depth,disparity,focal_length)
-    colors = read_image_colors("data/artroom1/im0.png", X_valid, Y_valid, Z_valid)
+    colors = read_image_colors("data/bandsaw1/im0.png", X_valid, Y_valid, Z_valid)
     vizualize_point_cloud(X_valid, Y_valid, Z_valid,colors)
 
     pcd = generate_3D_mesh(X_valid, Y_valid, Z_valid,colors)
@@ -107,4 +112,8 @@ def main():
 
 
 if __name__=='__main__':
-    main()
+    # disparity = readPFM("data/Backpack-imperfect/disp0.pfm")
+    # test_vizualize_disperity_map(disparity)
+    # load_data("data")
+    start_training()
+    # main()
