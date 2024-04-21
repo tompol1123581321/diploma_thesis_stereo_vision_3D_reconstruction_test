@@ -1,95 +1,97 @@
+import numpy as np
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-from model.CNN_model import StereoCNN
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torchvision.transforms import Compose, Resize, ToTensor
 
-from model.data_loader import get_datasets, get_training_augmentation
+from model.CNN_model import DisparityEstimationNet
+from model.data_loader import StereoDataset\
 
-def compute_loss(outputs, true_disparity):
-    return nn.SmoothL1Loss()(outputs, true_disparity)
+def custom_collate(batch):
+    inputs, targets = zip(*batch)
+    
+    inputs = torch.stack(inputs, dim=0)
+    targets = torch.stack(targets, dim=0)
+    
+    return inputs, targets
 
-def percentage_of_correct_pixels(pred, target, threshold=3):
-    abs_diff = torch.abs(pred - target)
-    correct_pixels = (abs_diff < threshold).float()
-    accuracy = correct_pixels.mean() * 100.0
-    return accuracy
+def disparity_accuracy(predicted, ground_truth, threshold=0.5):
+    abs_diff = torch.abs(predicted - ground_truth)
+    correct = abs_diff <= threshold
+    return torch.mean(correct.float()) * 100
 
-def validate(model, data_loader, loss_function, device):
-    model.eval()
-    total_loss = 0
-    total_accuracy = 0
-    with torch.no_grad():
-        for data in data_loader:
-            left_imgs = data['left_img'].to(device)
-            right_imgs = data['right_img'].to(device)
-            true_disparity = data['disparity_map'].to(device)
+def save_model(model, path):
+    """
+    Save the given model to the specified path.
+    """
+    torch.save(model.state_dict(), path)
 
-            outputs = model(left_imgs, right_imgs)
-            loss = loss_function(outputs, true_disparity)
-            accuracy = percentage_of_correct_pixels(outputs, true_disparity)
-
-            total_loss += loss.item()
-            total_accuracy += accuracy
-
-    return total_loss / len(data_loader), total_accuracy / len(data_loader)
-
-def train_model_loop(num_epochs, train_loader, val_loader, device, patience=5):
-    model = StereoCNN().to(device)
-    loss_function = nn.SmoothL1Loss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
-    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=patience)
-
-    best_val_loss = float('inf')
-    epochs_no_improve = 0
-
+def train(model, device, train_loader, val_loader, optimizer, num_epochs=20):
+    model.train()
+    best_val_loss = float('inf') 
+    
     for epoch in range(num_epochs):
         model.train()
-        total_train_loss = 0
-        total_train_accuracy = 0
-
-        for data in train_loader:
-            left_imgs = data['left_img'].to(device)
-            right_imgs = data['right_img'].to(device)
-            true_disparity = data['disparity_map'].to(device)
-
+        running_loss = 0.0
+        total_accuracy = 0.0
+        for inputs, targets in train_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
             optimizer.zero_grad()
-            outputs = model(left_imgs, right_imgs)
-            loss = compute_loss(outputs, true_disparity)
+            outputs = model(inputs)
+            loss = F.mse_loss(outputs, targets)
             loss.backward()
             optimizer.step()
+            running_loss += loss.item()
+            accuracy = disparity_accuracy(outputs, targets)
+            total_accuracy += accuracy
 
-            total_train_loss += loss.item()
-            accuracy = percentage_of_correct_pixels(outputs, true_disparity)
-            total_train_accuracy += accuracy
+        print(f'Epoch {epoch + 1}, Train Loss: {running_loss / len(train_loader):.3f}, Train Accuracy: {total_accuracy / len(train_loader):.2f}%')
 
-        avg_train_loss = total_train_loss / len(train_loader)
-        avg_train_accuracy = total_train_accuracy / len(train_loader)
-        val_loss, val_accuracy = validate(model, val_loader, loss_function, device)
+        model.eval()
+        val_loss = 0.0
+        val_accuracy = 0.0
+        with torch.no_grad():
+            for inputs, targets in val_loader:
+                inputs, targets = inputs.to(device), targets.to(device)
+                outputs = model(inputs)
+                loss = F.mse_loss(outputs, targets)
+                val_loss += loss.item()
+                accuracy = disparity_accuracy(outputs, targets)
+                val_accuracy += accuracy
 
-        print(f'Epoch [{epoch + 1}/{num_epochs}] - Training Loss: {avg_train_loss:.4f}, Training Accuracy: {avg_train_accuracy:.2f}%, Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}%')
+        val_loss_avg = val_loss / len(val_loader)
+        print(f'Epoch {epoch + 1}, Val Loss: {val_loss_avg:.3f}, Val Accuracy: {val_accuracy / len(val_loader):.2f}%')
 
-        scheduler.step(val_loss)
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            epochs_no_improve = 0
-            torch.save(model.state_dict(), 'best_model.pth')
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                print('Early stopping triggered.')
-                break
+        if val_loss_avg < best_val_loss:
+            best_val_loss = val_loss_avg
+            save_model(model, f'best_model_epoch_{epoch+1}.pth')
 
 def start_training():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    root_dir = 'data'
-    transform = get_training_augmentation()
-    train_dataset, val_dataset = get_datasets(root_dir, transform)
 
-    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False, num_workers=4)
+    dataset = StereoDataset(root_dir="data")
+    total_size = len(dataset)
+    indices = list(range(total_size))
+    np.random.shuffle(indices)
 
-    train_model_loop(20, train_loader, val_loader, device)
+    split = int(np.floor(0.8 * total_size))
+    train_indices, val_indices = indices[:split], indices[split:]
+
+    train_dataset = StereoDataset(root_dir="data", indices=train_indices, transform=Compose([
+        Resize((1080, 1920)),
+        ToTensor()
+        
+    ]))
+    val_dataset = StereoDataset(root_dir="data", indices=val_indices, transform=Compose([
+        Resize((1080, 1920)),
+        ToTensor()
+    ]))
+
+    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, collate_fn=custom_collate)
+    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False,num_workers=4)
+
+    model = DisparityEstimationNet().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    train(model, device, train_loader, val_loader, optimizer)
+

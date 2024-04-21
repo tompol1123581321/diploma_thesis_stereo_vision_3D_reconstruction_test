@@ -4,8 +4,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cv2  # OpenCV library
 import open3d as o3d
+from PIL import Image
 import torch
 
+from model.generate_and_save_disparity import generate_and_save_disparity
 from model.model_training import start_training
 from model.read_pfm import readPFM 
 
@@ -28,7 +30,7 @@ def extract_parameters(filepath):
 
     return focal_length, baseline, ndisp, vmin, vmax
 
-focal_length, baseline, ndisp, vmin, vmax = extract_parameters("data/bandsaw1/calib.txt")
+focal_length, baseline, ndisp, vmin, vmax = extract_parameters("data/artroom1/calib.txt")
 print(focal_length, baseline, ndisp, vmin, vmax)
 
 def test_visualize_disparity_map(disparity):
@@ -56,11 +58,19 @@ def calculate_depth_map(disparity,focal_length,baseline):
     return focal_length * baseline / np.maximum(disparity, 1e-6)  # Avoid division by zero
 
 def create_point_cloud(depth, disparity, focal_length):
-    height, width = disparity.shape
+    # Ensure the depth map has the same dimensions as the disparity map
+    width,height  = disparity.size  # As disparity is a PIL image
+    disparity = np.array(disparity)
 
+    # Debugging: Print shapes to check
+    print("Depth shape:", depth.shape)
+    print("Disparity size:", disparity.size)
+
+    # Create grid of coordinates
     x = np.tile(np.arange(width), (height, 1))
     y = np.repeat(np.arange(height), width).reshape(height, width)
 
+    # Compute coordinates
     X = (x - 792.27) * depth / focal_length
     Y = (y - 541.89) * depth / focal_length
     Z = depth
@@ -70,6 +80,7 @@ def create_point_cloud(depth, disparity, focal_length):
     X_valid = X[valid_mask]
     Y_valid = Y[valid_mask]
     Z_valid = Z[valid_mask]
+
     return X_valid, Y_valid, Z_valid
 
 def read_image_colors(img_path,X_valid,Y_valid,Z_valid):
@@ -101,10 +112,10 @@ def vizualize_3D_mesh(pcd):
     o3d.visualization.draw_geometries([pcd], point_show_normal=False)
 
 def main():
-    disparity = readPFM("data/bandsaw1/disp0.pfm")
+    disparity =  Image.open("data/artroom1/disp0.pfm").convert('L')
     depth = calculate_depth_map(disparity,focal_length,baseline)
     X_valid, Y_valid, Z_valid = create_point_cloud(depth,disparity,focal_length)
-    colors = read_image_colors("data/bandsaw1/im0.png", X_valid, Y_valid, Z_valid)
+    colors = read_image_colors("data/artroom1/im0.png", X_valid, Y_valid, Z_valid)
     vizualize_point_cloud(X_valid, Y_valid, Z_valid,colors)
 
     pcd = generate_3D_mesh(X_valid, Y_valid, Z_valid,colors)
@@ -112,8 +123,9 @@ def main():
 
 
 if __name__=='__main__':
-    # disparity = readPFM("data/Backpack-imperfect/disp0.pfm")
-    # test_vizualize_disperity_map(disparity)
+    # disparity =  Image.open("data/artroom1/disp0.pfm").convert('L')
+    # test_visualize_disparity_map(disparity)
     # load_data("data")
     start_training()
+    # generate_and_save_disparity("best_model_epoch_2.pth","data/bandsaw1/im0.png","data/bandsaw1/im1.png","test_output_disparity_map.pfm")
     # main()
