@@ -1,97 +1,87 @@
-import numpy as np
 import torch
-import torch.nn.functional as F
+import torch.nn as nn
 from torch.utils.data import DataLoader
-from torchvision.transforms import Compose, Resize, ToTensor
+import matplotlib.pyplot as plt
 
-from model.CNN_model import DisparityEstimationNet
-from model.data_loader import StereoDataset\
+from model.CNN_model import EnhancedCustomCNN
+from model.data_loader import StereoDataset, load_data
 
-def custom_collate(batch):
-    inputs, targets = zip(*batch)
-    
-    inputs = torch.stack(inputs, dim=0)
-    targets = torch.stack(targets, dim=0)
-    
-    return inputs, targets
+def save_heatmap(data, filename):
+    """Save heatmap of disparity data."""
+    plt.imshow(data, cmap='hot', interpolation='nearest')
+    plt.colorbar()
+    plt.savefig(filename)
+    plt.close()
 
-def disparity_accuracy(predicted, ground_truth, threshold=0.5):
-    abs_diff = torch.abs(predicted - ground_truth)
-    correct = abs_diff <= threshold
-    return torch.mean(correct.float()) * 100
+def pixel_precision(outputs, targets, threshold=1.0):
+    """Calculate the percentage of pixels where the disparity is within a threshold."""
+    return torch.mean(((torch.abs(outputs - targets) < threshold).float())).item()
 
-def save_model(model, path):
-    """
-    Save the given model to the specified path.
-    """
-    torch.save(model.state_dict(), path)
+def train_custom_cnn(data_dir, num_epochs=20, patience=5):
+    device = torch.device("cpu")  # Force using CPU to avoid any CUDA errors
 
-def train(model, device, train_loader, val_loader, optimizer, num_epochs=20):
-    model.train()
-    best_val_loss = float('inf') 
-    
+    model = EnhancedCustomCNN().to(device)
+    criterion = nn.SmoothL1Loss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
+
+    train_left, train_right, train_disp, val_left, val_right, val_disp = load_data(data_dir)
+    train_dataset = StereoDataset(train_left, train_right, train_disp, augment=True)
+    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=0)
+    val_dataset = StereoDataset(val_left, val_right, val_disp)
+    val_loader = DataLoader(val_dataset, batch_size=1, num_workers=0)
+
+    best_val_loss = float('inf')
+    epochs_since_improvement = 0
+
     for epoch in range(num_epochs):
         model.train()
-        running_loss = 0.0
-        total_accuracy = 0.0
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
+        total_loss, total_precision = 0, 0
+
+        for i, (left_img, right_img, disparity) in enumerate(train_loader):
+            left_img, right_img, disparity = [x.to(device) for x in [left_img, right_img, disparity]]
             optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = F.mse_loss(outputs, targets)
+            outputs = model(left_img, right_img)
+            loss = criterion(outputs, disparity)
             loss.backward()
             optimizer.step()
-            running_loss += loss.item()
-            accuracy = disparity_accuracy(outputs, targets)
-            total_accuracy += accuracy
 
-        print(f'Epoch {epoch + 1}, Train Loss: {running_loss / len(train_loader):.3f}, Train Accuracy: {total_accuracy / len(train_loader):.2f}%')
+            total_loss += loss.item()
+            total_precision += pixel_precision(outputs, disparity)
+
+            if i % 10 == 0:  # Print progress every 10 batches
+                print(f"Epoch {epoch+1}, Batch {i+1}, Training Loss: {loss.item()}, Precision: {pixel_precision(outputs, disparity)}")
+
+        epoch_loss = total_loss / len(train_loader)
+        epoch_precision = total_precision / len(train_loader)
+        print(f"Epoch {epoch+1}, Average Training Loss: {epoch_loss}, Average Precision: {epoch_precision}")
 
         model.eval()
-        val_loss = 0.0
-        val_accuracy = 0.0
+        total_val_loss = 0
         with torch.no_grad():
-            for inputs, targets in val_loader:
-                inputs, targets = inputs.to(device), targets.to(device)
-                outputs = model(inputs)
-                loss = F.mse_loss(outputs, targets)
-                val_loss += loss.item()
-                accuracy = disparity_accuracy(outputs, targets)
-                val_accuracy += accuracy
+            for i, (left_img, right_img, disparity) in enumerate(val_loader):
+                left_img, right_img, disparity = [x.to(device) for x in [left_img, right_img, disparity]]
+                outputs = model(left_img, right_img)
+                val_loss = criterion(outputs, disparity)
+                total_val_loss += val_loss.item()
 
-        val_loss_avg = val_loss / len(val_loader)
-        print(f'Epoch {epoch + 1}, Val Loss: {val_loss_avg:.3f}, Val Accuracy: {val_accuracy / len(val_loader):.2f}%')
+                if i == 0:  # Save the first batch of results as heatmaps for visual inspection
+                    save_heatmap(outputs.cpu().squeeze().numpy(), f"result_disparity_epoch_{epoch+1}.png")
+                    save_heatmap(disparity.cpu().squeeze().numpy(), f"ground_truth_disparity_epoch_{epoch+1}.png")
 
-        if val_loss_avg < best_val_loss:
-            best_val_loss = val_loss_avg
-            save_model(model, f'best_model_epoch_{epoch+1}.pth')
+        avg_val_loss = total_val_loss / len(val_loader)
+        print(f"Epoch {epoch+1}, Validation Loss: {avg_val_loss}")
+        scheduler.step()
+
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            epochs_since_improvement = 0
+            torch.save(model.state_dict(), "best_cnn_disparity_map_generator.pth")
+            print(f"Saved new best model at epoch {epoch+1}")
+
+        if epochs_since_improvement >= patience:
+            print('Early stopping triggered!')
+            break
 
 def start_training():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    dataset = StereoDataset(root_dir="data")
-    total_size = len(dataset)
-    indices = list(range(total_size))
-    np.random.shuffle(indices)
-
-    split = int(np.floor(0.8 * total_size))
-    train_indices, val_indices = indices[:split], indices[split:]
-
-    train_dataset = StereoDataset(root_dir="data", indices=train_indices, transform=Compose([
-        Resize((1080, 1920)),
-        ToTensor()
-        
-    ]))
-    val_dataset = StereoDataset(root_dir="data", indices=val_indices, transform=Compose([
-        Resize((1080, 1920)),
-        ToTensor()
-    ]))
-
-    train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True, collate_fn=custom_collate)
-    val_loader = DataLoader(val_dataset, batch_size=4, shuffle=False,num_workers=4)
-
-    model = DisparityEstimationNet().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-    train(model, device, train_loader, val_loader, optimizer)
-
+    train_custom_cnn("data")

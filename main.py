@@ -7,7 +7,6 @@ import open3d as o3d
 from PIL import Image
 import torch
 
-from model.generate_and_save_disparity import generate_and_save_disparity
 from model.model_training import start_training
 from model.read_pfm import readPFM 
 
@@ -30,7 +29,7 @@ def extract_parameters(filepath):
 
     return focal_length, baseline, ndisp, vmin, vmax
 
-focal_length, baseline, ndisp, vmin, vmax = extract_parameters("data/artroom1/calib.txt")
+focal_length, baseline, ndisp, vmin, vmax = extract_parameters("data/real-data/artroom1/calib.txt")
 print(focal_length, baseline, ndisp, vmin, vmax)
 
 def test_visualize_disparity_map(disparity):
