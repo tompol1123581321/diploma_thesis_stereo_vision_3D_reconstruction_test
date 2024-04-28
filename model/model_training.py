@@ -17,7 +17,7 @@ def pixel_precision(outputs, targets, threshold=1.0):
     """Calculate the percentage of pixels where the disparity is within a threshold."""
     return torch.mean(((torch.abs(outputs - targets) < threshold).float())).item()
 
-def train_custom_cnn(data_dir, num_epochs=20, patience=5):
+def train_custom_cnn(data_dir, num_epochs=25, patience=10):
     device = torch.device("cpu")  # Force using CPU to avoid any CUDA errors
 
     model = EnhancedCustomCNN().to(device)

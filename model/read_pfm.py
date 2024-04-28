@@ -1,10 +1,17 @@
+import numpy as np
 import re
 
-import numpy as np
-
-
-def readPFM(file, max_disparity=2000):
-    """ Read a PFM file and return its content after applying a maximum disparity clipping. """
+def readPFM(file, max_disparity=np.inf, disparity_channel=0):
+    """Read a PFM file and return its content after applying a maximum disparity clipping.
+    
+    Args:
+        file (str): Path to the PFM file.
+        max_disparity (float): Maximum value for disparity clipping.
+        disparity_channel (int): Index of the channel containing disparity data in color images.
+        
+    Returns:
+        numpy.ndarray: The loaded and potentially clipped disparity data.
+    """
     with open(file, "rb") as f:
         header = f.readline().rstrip()
         if header == b'PF':
@@ -29,8 +36,7 @@ def readPFM(file, max_disparity=2000):
 
         # Apply clipping to the disparity data
         if color:
-            # Assuming the disparity information is in one of the channels, usually the first
-            data[:, :, 0] = np.clip(data[:, :, 0], -np.inf, max_disparity)
+            data[:, :, disparity_channel] = np.clip(data[:, :, disparity_channel], -np.inf, max_disparity)
         else:
             data = np.clip(data, -np.inf, max_disparity)
 

@@ -1,12 +1,14 @@
 import os
+import random
 from sklearn.model_selection import train_test_split
 import torch
 from torch.utils.data import Dataset
-from torchvision.transforms import Compose, ToTensor, Resize, RandomHorizontalFlip, RandomRotation
+from torchvision.transforms import Compose, ToTensor, Resize, RandomHorizontalFlip, RandomRotation, ColorJitter, Normalize
 from PIL import Image
 import numpy as np
 from torchvision.transforms.functional import to_tensor
 import torchvision.transforms.functional as TF
+from torchvision.transforms.functional import to_pil_image
 
 from model.read_pfm import readPFM
 
@@ -32,19 +34,23 @@ def disparity_read(filename,target_size):
         return np.zeros(target_size)
 
 class StereoDataset(Dataset):
-    def __init__(self, left_image_paths, right_image_paths, disparity_paths, augment=False, target_size=(540, 960)):
+    def __init__(self, left_image_paths, right_image_paths, disparity_paths, augment=False, target_size=(960, 540),
+                 rotation_range=10, horizontal_flip_prob=0.5, color_jitter_params=None, normalize_params=None):
         self.left_image_paths = left_image_paths
         self.right_image_paths = right_image_paths
         self.disparity_paths = disparity_paths
         self.augment = augment
         self.target_size = target_size
 
-        self.transform = Compose([
-            Resize(target_size),
-            ToTensor(),
-            RandomHorizontalFlip() if augment else lambda x: x,
-            RandomRotation(10) if augment else lambda x: x,
-        ])
+        # Basic transformations
+        self.to_tensor = ToTensor()
+        self.resize = Resize(target_size)
+        self.normalize = Normalize(**normalize_params) if normalize_params else lambda x: x
+
+        # Augmentation configurations
+        self.horizontal_flip_prob = horizontal_flip_prob
+        self.rotation_range = rotation_range
+        self.color_jitter = ColorJitter(**color_jitter_params) if color_jitter_params else lambda x: x
 
     def __len__(self):
         return len(self.left_image_paths)
@@ -54,13 +60,33 @@ class StereoDataset(Dataset):
         right_img = Image.open(self.right_image_paths[idx]).convert("RGB")
         disparity = disparity_read(self.disparity_paths[idx], self.target_size)
 
-        # Apply transformations which now include resizing
-        left_img = self.transform(left_img)
-        right_img = self.transform(right_img)
-        disparity = torch.tensor(disparity).unsqueeze(0)  # Adding channel dimension for disparity
+        # Convert disparity to PIL image for transformations
+        disparity = to_pil_image(disparity)
 
+        if self.augment:
+            # Apply the same random transformations to both images and the disparity map
+            angle = random.uniform(-self.rotation_range, self.rotation_range)
+            if random.random() < self.horizontal_flip_prob:
+                left_img = TF.hflip(left_img)
+                right_img = TF.hflip(right_img)
+                disparity = TF.hflip(disparity)
+            left_img = TF.rotate(left_img, angle)
+            right_img = TF.rotate(right_img, angle)
+            disparity = TF.rotate(disparity, angle)
+            left_img = self.color_jitter(left_img)
+            right_img = self.color_jitter(right_img)
 
-        return left_img, right_img, disparity
+        # Convert disparity back to tensor after transformations
+        disparity = to_tensor(disparity)
+
+        # Apply basic transformations and normalization
+        left_img = self.to_tensor(self.resize(left_img))
+        right_img = self.to_tensor(self.resize(right_img))
+
+        left_img = self.normalize(left_img)
+        right_img = self.normalize(right_img)
+
+        return left_img, right_img, disparity.unsqueeze(0) 
 
 def load_data(data_dir, test_size=0.2):
     left_image_paths = []
