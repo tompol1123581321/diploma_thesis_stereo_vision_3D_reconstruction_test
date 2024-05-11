@@ -12,4 +12,4 @@ Spuštění
 -> instalace všech dependencí (pip)
 -> uprava main.py soubory (odkomentování, zakomentování, úprava argumentů funkcí)
     -> Dávat pozor na jména argumentů a dle toho postupovat
--> spuštění main.py s odkomentovanou funkcí s daného modulu, který cheme použít
+-> spuštění main.py z venv s odkomentovanou funkcí z daného modulu, který cheme použít
