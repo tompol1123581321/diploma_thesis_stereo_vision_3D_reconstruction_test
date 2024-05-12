@@ -6,8 +6,8 @@ from reconstruction_module.reconstruct_and_vizualize_mesh import (
 
 
 def main():
-    start_training()
-    # compare("trained_models/cnn_disparity_generator_model_epoch_20.pth")
+    # start_training()
+    compare("trained_models/cnn_disparity_generator_model_epoch_20.pth")
     # reconstruct_and_vizualize_mesh(
     #     "data/real-data/pendulum2/im0.png",
     #     "data/real-data/pendulum2/im1.png",

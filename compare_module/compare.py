@@ -16,22 +16,6 @@ from model_module.read_pfm import readPFM
 from reconstruction_module.read_parameters import read_parameters
 
 
-def save_heatmap(data, filename):
-    """Save heatmap of disparity data, normalized to range [0, 1] based on percentiles."""
-    p2, p98 = np.percentile(data, [2, 98])
-    data_clipped = np.clip(data, p2, p98)
-    if p98 > p2:
-        data_normalized = (data_clipped - p2) / (p98 - p2)
-    else:
-        data_normalized = data_clipped
-
-    plt.imshow(data_normalized, cmap="hot", interpolation="nearest")
-    plt.colorbar()
-    plt.title("Disparity Map")
-    plt.savefig(filename)
-    plt.close()
-
-
 def generate_cnn_disparity(model, left_img_path, right_img_path):
     """Generates a disparity map using a CNN model and saves it."""
     left_img = load_and_preprocess_image(left_img_path)
@@ -112,11 +96,11 @@ def compare_disparity_maps(model, validation_folders):
     sift_rmse_vals = []
     results_md = "results_comparison/results_table.md"
     with open(results_md, "w") as md_file:
-        md_file.write("| Folder | CNN RMSE | BM RMSE |\n")
+        md_file.write("| Folder | CNN RMSE | StereoBM RMSE |\n")
         md_file.write("|--------|----------|-----------|\n")
 
         # Limit comparison to the first 30 folders
-        for index, folder in enumerate(validation_folders[:30]):
+        for index, folder in enumerate(validation_folders[:50]):
             left_img_path = os.path.join(folder, "im0.png")
             right_img_path = os.path.join(folder, "im1.png")
             ground_truth_path = os.path.join(folder, "disp0.pfm")
@@ -160,7 +144,7 @@ def compare_disparity_maps(model, validation_folders):
             axs[1].set_title("CNN Disparity")
             axs[1].axis("off")
             axs[2].imshow(bm_disparity, cmap="hot", norm=norm)
-            axs[2].set_title("SIFT Disparity")
+            axs[2].set_title("StereoBM Disparity")
             axs[2].axis("off")
             plt.suptitle(f"Disparity Map Comparison for Folder {folder}")
             plt.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -174,10 +158,10 @@ def compare_disparity_maps(model, validation_folders):
         sift_avg_rmse = np.mean(sift_rmse_vals)
         md_file.write("\n## Average RMSE Values\n")
         md_file.write(f"- **CNN Average RMSE:** {cnn_avg_rmse:.3f}\n")
-        md_file.write(f"- **BM Average RMSE:** {sift_avg_rmse:.3f}\n")
+        md_file.write(f"- **StereoBM Average RMSE:** {sift_avg_rmse:.3f}\n")
 
         print(f"Average RMSE (CNN): {cnn_avg_rmse}")
-        print(f"Average RMSE (SIFT): {sift_avg_rmse}")
+        print(f"Average RMSE (StereoBM): {sift_avg_rmse}")
 
 
 def compare(model_path="trained_models/cnn_disparity_generator_model_epoch_20.pth"):
